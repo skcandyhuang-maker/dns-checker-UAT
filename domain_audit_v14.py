@@ -501,6 +501,13 @@ with tab1:
                 time.sleep(1)
                 st.rerun()
 
+    # v14優化：直接在網頁下方顯示當前資料庫內容
+    if not df_domains.empty:
+        st.divider()
+        st.subheader(" 檢測結果預覽")
+        st.dataframe(df_domains, use_container_width=True, height=400)
+
+
 # --- 分頁 2: IP 反查 ---
 with tab2:
     st.header("IP 反查與存活驗證 (DB 自動存檔)")
