@@ -18,7 +18,7 @@ import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # 設定頁面標題
-st.set_page_config(page_title="Andy的全能網管工具 (UAT v14修正版)", layout="wide")
+st.set_page_config(page_title="Andy的全能網管工具 (UAT v14版)", layout="wide")
 
 # ==========================================
 #  資料庫 (SQLite) 核心模組
