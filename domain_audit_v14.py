@@ -18,7 +18,7 @@ import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # 設定頁面標題
-st.set_page_config(page_title="Andy的全能網管工具 (UAT v14版)", layout="wide")
+st.set_page_config(page_title="Andy的全能網管工具 (UAT v15版)", layout="wide")
 
 # ==========================================
 #  資料庫 (SQLite) 核心模組
@@ -33,7 +33,7 @@ def init_db():
             domain TEXT PRIMARY KEY,
             cdn_provider TEXT, cloud_hosting TEXT, multi_ip TEXT, cname TEXT, ips TEXT,
             country TEXT, city TEXT, isp TEXT, tls_1_3 TEXT, protocol TEXT, issuer TEXT,
-            ssl_days TEXT, global_ping TEXT, simple_ping TEXT,
+            ssl_days TEXT, sec_headers TEXT, ssl_labs TEXT, global_ping TEXT, simple_ping TEXT,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
@@ -64,13 +64,13 @@ def save_domain_result(data):
             INSERT OR REPLACE INTO domain_audit (
                 domain, cdn_provider, cloud_hosting, multi_ip, cname, ips, 
                 country, city, isp, tls_1_3, protocol, issuer, ssl_days, 
-                global_ping, simple_ping
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                sec_headers, ssl_labs, global_ping, simple_ping
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             data['Domain'], data['CDN Provider'], data['Cloud/Hosting'], data['Multi-IP'],
             data['CNAME'], data['IPs'], data['Country'], data['City'], data['ISP'],
             data['TLS 1.3'], data['Protocol'], data['Issuer'], str(data['SSL Days']),
-            data['Global Ping'], data['Simple Ping']
+            data['Sec Headers'], data['SSL Labs'], data['Global Ping'], data['Simple Ping']
         ))
         conn.commit()
     except Exception as e: print(f"DB Error: {e}")
@@ -84,8 +84,8 @@ def get_all_domain_results():
             "domain": "Domain", "cdn_provider": "CDN Provider", "cloud_hosting": "Cloud/Hosting",
             "multi_ip": "Multi-IP", "cname": "CNAME", "ips": "IPs", "country": "Country", 
             "city": "City", "isp": "ISP", "tls_1_3": "TLS 1.3", "protocol": "Protocol", 
-            "issuer": "Issuer", "ssl_days": "SSL Days", "global_ping": "Global Ping", 
-            "simple_ping": "Simple Ping"
+            "issuer": "Issuer", "ssl_days": "SSL Days", "sec_headers": "Sec Headers",
+            "ssl_labs": "SSL Labs", "global_ping": "Global Ping", "simple_ping": "Simple Ping"
         })
         if "updated_at" in df.columns: df = df.drop(columns=["updated_at"])
         return df
@@ -160,17 +160,11 @@ def detect_providers(cname_record, isp_name):
     cdns = []
     clouds = []
     
-    # ==========================================
-    # 1. 所有的 CDN 特徵庫 
-    # ==========================================
     cdn_sigs = {
-        # --- 全球四大/公有雲原生 CDN ---
         "AWS CloudFront": ["cloudfront"],
         "Cloudflare": ["cloudflare", "cdn.cloudflare.net"],
         "Azure FrontDoor/CDN": ["azurefd", "azureedge", "msecnd", "trafficmanager"],
         "Akamai": ["akamai", "edgekey", "akamaiedge"],
-        
-        # --- 知名獨立 CDN 與資安 WAF 廠商 ---
         "Fastly": ["fastly", "fastly.net"],
         "Imperva (Incapsula)": ["incapdns", "imperva"],
         "Edgio (Edgecast/Limelight)": ["edgecast", "systemcdn", "llnwd", "limelight"], 
@@ -181,15 +175,11 @@ def detect_providers(cname_record, isp_name):
         "HINET CDN": ["hinet"],
         "HIWAF": ["hiwaf"],
         "WIX": ["wixdns.net"],
-        
-        # --- 輕量級 / 開發者最愛 Edge CDN ---
         "Bunny CDN": ["b-cdn.net", "bunny.net", "bunnycdn"],
         "KeyCDN": ["kxcdn"],
         "CacheFly": ["cachefly"],
         "Vercel Edge": ["vercel", "vercel-dns"],
         "Netlify Edge": ["netlify"],
-        
-        # --- 亞太區 / 中國大陸主力 CDN ---
         "Alibaba CDN": ["kunlun", "alikunlun", "alibabacdn"],
         "Tencent CDN": ["cdntip", "qcloud", "dnspod"],
         "Wangsu (網宿/Quantil)": ["wswebpic", "wscdns", "quantil", "chinanetcenter"],
@@ -205,9 +195,6 @@ def detect_providers(cname_record, isp_name):
             if f"⚡ {provider}" not in cdns:
                 cdns.append(f"⚡ {provider}")
 
-    # ==========================================
-    # 2. 所有的雲端主機特徵庫
-    # ==========================================
     cloud_sigs = {
         "AWS": ["amazon", "amazonaws", "aws ec2"],
         "Google Cloud": ["google", "googleusercontent", "gcp"],
@@ -221,25 +208,17 @@ def detect_providers(cname_record, isp_name):
     }
     
     for provider, keywords in cloud_sigs.items():
-        # 【超強防呆機制】：防止 CDN 與母公司雲端主機重複顯示
-        if provider == "AWS" and any("CloudFront" in c for c in cdns):
-            continue
-        if provider == "Azure" and any("FrontDoor" in c for c in cdns):
-            continue
-        if provider == "Alibaba Cloud" and any("Alibaba CDN" in c for c in cdns):
-            continue
-        if provider == "Tencent Cloud" and any("Tencent CDN" in c for c in cdns):
-            continue
+        if provider == "AWS" and any("CloudFront" in c for c in cdns): continue
+        if provider == "Azure" and any("FrontDoor" in c for c in cdns): continue
+        if provider == "Alibaba Cloud" and any("Alibaba CDN" in c for c in cdns): continue
+        if provider == "Tencent Cloud" and any("Tencent CDN" in c for c in cdns): continue
             
-        # 如果不是上述 CDN，才檢查是否為一般雲端或 VPS 主機
         if any(kw in cname for kw in keywords) or any(kw in isp for kw in keywords):
             if f"☁️ {provider}" not in clouds:
                 clouds.append(f"☁️ {provider}")
 
-    # 格式化輸出
     cdn_result = " + ".join(cdns) if cdns else "-"
     cloud_result = " + ".join(clouds) if clouds else "-"
-
     return cdn_result, cloud_result
 
 def run_globalping_api(domain):
@@ -282,13 +261,51 @@ def run_simple_ping(domain):
             return f"⚠️ {resp.status_code} (HTTP)"
         except: return "❌ Fail"
 
+def run_security_headers(domain):
+    url = f"https://securityheaders.com/?q={domain}&hide=on&followRedirects=on"
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    try:
+        resp = requests.get(url, headers=headers, timeout=10)
+        grade = resp.headers.get('x-grade')
+        if grade:
+            return f"✅ {grade}"
+        match = re.search(r'<div class="score">\s*<span>(.*?)</span>', resp.text)
+        if match:
+            return f"✅ {match.group(1).upper()}"
+        return "⚠️ 未知"
+    except Exception as e:
+        return "❌ Fail"
+
+def run_ssllabs(domain):
+    url = f"https://api.ssllabs.com/api/v3/analyze?host={domain}&fromCache=on&maxAge=24&all=done"
+    headers = {"User-Agent": "Andy-Sec-Audit-Tool"}
+    try:
+        resp = requests.get(url, headers=headers, timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            status = data.get('status')
+            if status == 'READY':
+                endpoints = data.get('endpoints', [])
+                if endpoints and 'grade' in endpoints[0]:
+                    return f"✅ {endpoints[0]['grade']}"
+                return "⚠️ 無法評級"
+            elif status in ['IN_PROGRESS', 'DNS']:
+                return "⏳ 掃描中"
+            elif status == 'ERROR':
+                return "❌ Error"
+            else:
+                return f"⚠️ {status}"
+        return f"❌ API {resp.status_code}"
+    except Exception as e:
+        return "❌ Fail"
+
 def process_domain_audit(args):
     index, domain, config = args
     result = {
         "Domain": domain, "CDN Provider": "-", "Cloud/Hosting": "-", "Multi-IP": "-",
         "CNAME": "-", "IPs": "-", "Country": "-", "City": "-", "ISP": "-",
         "TLS 1.3": "-", "Protocol": "-", "Issuer": "-", "SSL Days": "-", 
-        "Global Ping": "-", "Simple Ping": "-"
+        "Sec Headers": "-", "SSL Labs": "-", "Global Ping": "-", "Simple Ping": "-"
     }
     if "未找到" in domain:
         result["IPs"] = "❌ Source Not Found"
@@ -298,7 +315,7 @@ def process_domain_audit(args):
         return (index, result)
 
     try:
-        if config['dns']:
+        if config.get('dns'):
             resolver = get_dns_resolver()
             try:
                 cname_ans = resolver.resolve(domain, 'CNAME')
@@ -316,29 +333,22 @@ def process_domain_audit(args):
             if ip_list:
                 result["IPs"] = ", ".join(ip_list)
                 if len(ip_list) > 1: result["Multi-IP"] = f"✅ Yes ({len(ip_list)})"
-                if config['geoip']:
+                if config.get('geoip'):
                     first_ip = ip_list[0]
                     if not first_ip.endswith('.'):
                         for attempt in range(3):
                             try:
                                 time.sleep(random.uniform(0.5, 1.5))
-                                # 💡 修正 1：在 URL 加上 org 欄位
                                 resp = requests.get(f"http://ip-api.com/json/{first_ip}?fields=country,city,isp,org,status", timeout=5).json()
-                                
                                 if resp.get("status") == "success":
                                     result["Country"] = resp.get("country", "-")
                                     result["City"] = resp.get("city", "-")
-                                    
-                                    # 💡 修正 2：將 isp 與 org 結合
                                     isp_val = resp.get("isp", "")
                                     org_val = resp.get("org", "")
-                                    
-                                    # 為了讓前端報表好看，我們把兩者組合成 "ISP名稱 (Org名稱)"
                                     if isp_val and org_val and isp_val != org_val:
                                         full_isp = f"{isp_val} ({org_val})"
                                     else:
                                         full_isp = org_val or isp_val or "-"
-                                        
                                     result["ISP"] = full_isp
                                     break
                             except: time.sleep(1)
@@ -347,7 +357,7 @@ def process_domain_audit(args):
                 result["Cloud/Hosting"] = cloud
             else: result["IPs"] = "No Record"
 
-        if config['ssl']:
+        if config.get('ssl'):
             ctx = ssl.create_default_context()
             ctx.check_hostname = False
             ctx.verify_mode = ssl.CERT_NONE
@@ -355,12 +365,8 @@ def process_domain_audit(args):
             try:
                 sock = socket.create_connection((domain, 443), timeout=5)
                 conn = ctx.wrap_socket(sock, server_hostname=domain)
-                
-                # --- 這裡修正了變數名稱 ---
-                result["Protocol"] = conn.version() # 修正：原本誤寫為 Actual_Protocol
+                result["Protocol"] = conn.version()
                 result["TLS 1.3"] = "✅ Yes" if conn.version() == 'TLSv1.3' else "❌ No"
-                # -----------------------
-                
                 cert = crypto.load_certificate(crypto.FILETYPE_ASN1, conn.getpeercert(binary_form=True))
                 issuer_obj = cert.get_issuer()
                 result["Issuer"] = issuer_obj.O if issuer_obj.O else (issuer_obj.CN if issuer_obj.CN else "Unknown")
@@ -370,8 +376,10 @@ def process_domain_audit(args):
             finally:
                 if conn: conn.close()
 
-        if config['global_ping']: result["Global Ping"] = run_globalping_api(domain)
-        if config['simple_ping']: result["Simple Ping"] = run_simple_ping(domain)
+        if config.get('global_ping'): result["Global Ping"] = run_globalping_api(domain)
+        if config.get('simple_ping'): result["Simple Ping"] = run_simple_ping(domain)
+        if config.get('sec_headers'): result["Sec Headers"] = run_security_headers(domain)
+        if config.get('ssllabs'): result["SSL Labs"] = run_ssllabs(domain)
 
     except Exception as e: result["IPs"] = str(e)
     return (index, result)
@@ -442,11 +450,11 @@ with st.sidebar:
         st.download_button(f"📄 下載 IP 反查報告 ({len(df_ips)}筆)", df_ips.to_csv(index=False).encode('utf-8-sig'), "ip_reverse_db.csv", "text/csv")
     else: st.write("IP 反查資料庫為空")
 
-tab1, tab2 = st.tabs([" 域名檢測", " IP 反查域名 (VT)"])
+tab1, tab2 = st.tabs(["🌐 域名檢測", "🔍 IP 反查域名 (VT)"])
 
 # --- 分頁 1: 域名檢測 ---
 with tab1:
-    st.header("Andy 的批量域名體檢工具-UAT v14版")
+    st.header("Andy 的批量域名體檢工具 - UAT v15版")
     col1, col2 = st.columns([1, 3])
     with col1:
         st.subheader("1. 檢測項目")
@@ -454,21 +462,23 @@ with tab1:
         check_geoip = st.checkbox("GeoIP 查詢 (國家/ISP)", value=True, help="查詢 IP 的地理位置，需呼叫外部 API，速度較慢")
         check_ssl = st.checkbox("SSL & TLS 憑證", value=True, help="顯示憑證組織 (O)、過期日與 TLS 1.3 支援")
         
-        st.subheader("2. 連線測試")
+        st.subheader("2. 第三方資安評級")
+        check_sec_headers = st.checkbox("Security Headers", value=False, help="查詢 securityheaders.com 評級 (A+ ~ F)")
+        check_ssllabs = st.checkbox("SSL Labs (快取優先)", value=False, help="查詢 ssllabs.com 評級。為保持極速，若無 24hr 內快取將觸發背景掃描，請稍後重查。")
+        
+        st.subheader("3. 連線測試")
         check_simple_ping = st.checkbox("Simple Ping (本機)", value=True, help="從目前主機發送請求，適合內網或本機測試")
         check_global_ping = st.checkbox("Global Ping (全球)", value=True, help="透過 API 從國外節點測試，速度較慢")
         
         st.divider()
-        st.subheader("3. 掃描速度")
+        st.subheader("4. 掃描速度")
         workers = st.slider("併發執行緒", 1, 5, 3)
         
-        st.info("💡 速度設定建議：")
-        st.markdown("""
-        * **(注意！ 併發數超過1 ， 導出順序會是亂的! )
-        * **1-2 (龜速)**：適合 **1000+** 筆資料。保證 GeoIP 不會被封鎖。
-        * **3 (平衡)**：適合 **100-500** 筆資料。
-        * **4-5 (極速)**：適合 **<100** 筆資料。
-        """)
+        st.info("💡 速度設定建議：\n"
+                "* **(注意！ 併發數超過1，導出順序會是亂的!)**\n"
+                "* **1-2 (龜速)**：適合 1000+ 筆資料。\n"
+                "* **3 (平衡)**：適合 100-500 筆資料。\n"
+                "* **4-5 (極速)**：適合 <100 筆資料。")
 
     with col2:
         raw_input = st.text_area("輸入域名 (會自動跳過已掃描項目)", height=150, placeholder="example.com\nwww.google.com")
@@ -483,7 +493,13 @@ with tab1:
                 else: st.warning("請輸入域名")
             else:
                 if skipped_count > 0: st.info(f"⏩ 已自動跳過 {skipped_count} 筆重複資料，本次將掃描 {len(domain_list)} 筆。")
-                config = {'dns': check_dns, 'geoip': check_geoip, 'ssl': check_ssl, 'global_ping': check_global_ping, 'simple_ping': check_simple_ping}
+                
+                config = {
+                    'dns': check_dns, 'geoip': check_geoip, 'ssl': check_ssl, 
+                    'global_ping': check_global_ping, 'simple_ping': check_simple_ping,
+                    'sec_headers': check_sec_headers, 'ssllabs': check_ssllabs
+                }
+                
                 indexed_domains = list(enumerate(domain_list))
                 progress_bar = st.progress(0)
                 status_text = st.empty()
@@ -501,10 +517,9 @@ with tab1:
                 time.sleep(1)
                 st.rerun()
 
-    # v14優化：直接在網頁下方顯示當前資料庫內容
     if not df_domains.empty:
         st.divider()
-        st.subheader(" 檢測結果預覽")
+        st.subheader("📊 檢測結果預覽")
         st.dataframe(df_domains, use_container_width=True, height=400)
 
 
@@ -513,7 +528,7 @@ with tab2:
     st.header("IP 反查與存活驗證 (DB 自動存檔)")
     api_key = st.text_input("請輸入 VirusTotal API Key", type="password")
     ip_input = st.text_area("輸入 IP 清單", height=150, placeholder="8.8.8.8")
-    if st.button(" 開始反查 IP", type="primary"):
+    if st.button("🔍 開始反查 IP", type="primary"):
         if not api_key: st.error("請輸入 API Key！")
         else:
             ip_list = parse_input_raw(ip_input)
