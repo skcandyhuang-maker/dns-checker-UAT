@@ -324,11 +324,19 @@ def check_legacy_tls(domain):
             ctx.verify_mode = ssl.CERT_NONE
             ctx.minimum_version = tls_ver
             ctx.maximum_version = tls_ver
+            
+            # 關鍵修正：強制將 OpenSSL 的安全級別降至 0，允許發起舊版與弱加密連線
+            try:
+                ctx.set_ciphers('DEFAULT@SECLEVEL=0')
+            except:
+                pass 
+
             with socket.create_connection((domain, 443), timeout=3) as sock:
                 with ctx.wrap_socket(sock, server_hostname=domain):
                     opened.append(ver_name)
-        except:
-            pass # 連線失敗代表已關閉或不支援
+        except Exception as e:
+            # 如果還是出錯，代表伺服器拒絕，或是握手失敗
+            pass 
             
     if not opened:
         return "✅ 皆已關閉"
