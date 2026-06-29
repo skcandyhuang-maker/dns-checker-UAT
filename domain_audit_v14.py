@@ -18,7 +18,7 @@ import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # 設定頁面標題 (更新為 v15)
-st.set_page_config(page_title="Andy的全能網管工具 (陸軍 v15版)", layout="wide")
+st.set_page_config(page_title="Andy的全能網管工具 (UAT v15版)", layout="wide")
 
 # ==========================================
 #  資料庫 (SQLite) 核心模組
@@ -512,7 +512,7 @@ tab1, tab2, tab3, tab4 = st.tabs([" 域名檢測", " IP 反查域名 (VT)", " �
 
 # --- 分頁 1: 域名檢測 ---
 with tab1:
-    st.header("Andy 的批量域名體檢工具-陸軍 v15版")
+    st.header("騰雲批量域名體檢工具-UAT v15版")
     col1, col2 = st.columns([1, 3])
     with col1:
         st.subheader("1. 檢測項目")
@@ -643,7 +643,7 @@ with tab3:
     * **新增防嵌入判定**：自動利用 `X-Frame-Options` (DENY/SAMEORIGIN) 與 `Content-Security-Policy` (frame-ancestors) 判定網站「能否被嵌入」並匯出於報表專屬欄位。
     * **舊版 TLS 淘汰檢查**：SSL & TLS 憑證模組中，新增 `TLS 1.0 / 1.1` 是否已徹底關閉的偵測功能，並將狀態匯出至報表中的專屬欄位。
     * **反查功能介面優化**：在「IP 反查域名 (VT)」頁籤下方，新增查詢結果的 DataFrame 即時預覽，免去每次都要下載 DB CSV 檔才能看結果的麻煩。
-    * **資源整合**：新增「更新紀錄」與「操作手冊」獨立頁籤，幫助維運團隊快速查閱文件與歷史異動。
+    * **資源整合**：新增「更新紀錄」與「操作手冊」獨立頁籤，幫助業務團隊快速查閱文件與歷史異動。
     
     ---
     
