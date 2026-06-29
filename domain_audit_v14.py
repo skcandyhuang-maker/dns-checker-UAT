@@ -17,7 +17,7 @@ import urllib3
 # 關閉 SSL 警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# 設定頁面標題
+# 設定頁面標題 (更新為 v15)
 st.set_page_config(page_title="Andy的全能網管工具 (陸軍 v15版)", layout="wide")
 
 # ==========================================
@@ -38,7 +38,7 @@ def init_db():
         )
     ''')
     
-    # 動態升級現有資料表，若無欄位則自動加上
+    # v15 新增欄位：動態升級現有資料表，若無欄位則自動加上
     try:
         c.execute("ALTER TABLE domain_audit ADD COLUMN security_headers TEXT DEFAULT '-'")
         c.execute("ALTER TABLE domain_audit ADD COLUMN tls_old TEXT DEFAULT '-'")
@@ -70,6 +70,7 @@ def save_domain_result(data):
     conn = sqlite3.connect(DB_FILE, timeout=30)
     c = conn.cursor()
     try:
+        # v15 更新：加入 security_headers, tls_old 與 can_be_embedded 寫入
         c.execute('''
             INSERT OR REPLACE INTO domain_audit (
                 domain, cdn_provider, cloud_hosting, multi_ip, cname, ips, 
@@ -90,6 +91,7 @@ def get_all_domain_results():
     conn = sqlite3.connect(DB_FILE)
     try:
         df = pd.read_sql_query("SELECT * FROM domain_audit", conn)
+        # v15 更新：加入新欄位 Mapping
         df = df.rename(columns={
             "domain": "Domain", "cdn_provider": "CDN Provider", "cloud_hosting": "Cloud/Hosting",
             "multi_ip": "Multi-IP", "cname": "CNAME", "ips": "IPs", "country": "Country", 
@@ -172,6 +174,7 @@ def detect_providers(cname_record, isp_name):
     clouds = []
     
     cdn_sigs = {
+        "騰雲運算 Skycloud": ["skycloud",["gocname"],
         "AWS CloudFront": ["cloudfront"],
         "Cloudflare": ["cloudflare", "cdn.cloudflare.net"],
         "Azure FrontDoor/CDN": ["azurefd", "azureedge", "msecnd", "trafficmanager"],
@@ -273,7 +276,7 @@ def run_simple_ping(domain):
             return f"⚠️ {resp.status_code} (HTTP)"
         except: return "❌ Fail"
 
-# 更新：依照要求精準匹配 6 大 Security Headers 與判斷是否能被嵌入
+# 更新：依照要求精準匹配 6 大 Security Headers 與判斷是否能被嵌入 (含 CSP 判斷)
 def check_security_headers(domain):
     headers_to_check = [
         'Strict-Transport-Security', 'Content-Security-Policy', 
@@ -287,17 +290,31 @@ def check_security_headers(domain):
         found = [h for h in headers_to_check if h in resp.headers]
         found_str = ", ".join(found) if found else "❌ 無"
         
-        # 2. 判斷能否被嵌入 (利用 X-Frame-Options)
+        # 2. 判斷能否被嵌入 (利用 X-Frame-Options 與 Content-Security-Policy)
         x_frame = resp.headers.get('X-Frame-Options', '').upper()
+        csp = resp.headers.get('Content-Security-Policy', '').lower()
+        
+        is_blocked = False
+        
+        # 條件 1: X-Frame-Options 包含 DENY 或 SAMEORIGIN
         if 'DENY' in x_frame or 'SAMEORIGIN' in x_frame:
-            embeddable = "❌ 否"
+            is_blocked = True
+            
+        # 條件 2: CSP 包含 frame-ancestors 'none' 或 frame-ancestors 'self'
+        if "frame-ancestors 'none'" in csp or "frame-ancestors 'self'" in csp:
+            is_blocked = True
+            
+        # 依照要求：可以被嵌入顯示 ❗️，不能被嵌入顯示 ✅
+        if is_blocked:
+            embeddable = "✅ 否"
         else:
-            embeddable = "✅ 是"
+            embeddable = "❗️ 是"
             
         return found_str, embeddable
     except:
         return "-", "-"
 
+# v15 新增功能：TLS 1.0 / 1.1 關閉測試
 def check_legacy_tls(domain):
     opened = []
     for ver_name, tls_ver in [("TLS 1.0", ssl.TLSVersion.TLSv1), ("TLS 1.1", ssl.TLSVersion.TLSv1_1)]:
@@ -311,7 +328,7 @@ def check_legacy_tls(domain):
                 with ctx.wrap_socket(sock, server_hostname=domain):
                     opened.append(ver_name)
         except:
-            pass 
+            pass # 連線失敗代表已關閉或不支援
             
     if not opened:
         return "✅ 皆已關閉"
@@ -401,9 +418,10 @@ def process_domain_audit(args):
             finally:
                 if conn: conn.close()
                 
+            # v15 新增：檢測舊版 TLS
             result["TLS 1.0/1.1"] = check_legacy_tls(domain)
 
-        # 更新：接回兩項回傳值
+        # v15 新增：檢測 Security Headers
         if config['security_header']:
             sec_headers, can_embed = check_security_headers(domain)
             result["Security Headers"] = sec_headers
@@ -481,6 +499,7 @@ with st.sidebar:
         st.download_button(f"📄 下載 IP 反查報告 ({len(df_ips)}筆)", df_ips.to_csv(index=False).encode('utf-8-sig'), "ip_reverse_db.csv", "text/csv")
     else: st.write("IP 反查資料庫為空")
 
+# v15 更新：擴增為 4 個分頁
 tab1, tab2, tab3, tab4 = st.tabs([" 域名檢測", " IP 反查域名 (VT)", " 更新紀錄", " 操作手冊"])
 
 # --- 分頁 1: 域名檢測 ---
@@ -492,8 +511,8 @@ with tab1:
         check_dns = st.checkbox("DNS 解析 (基礎)", value=True, help="解析 A 紀錄與 CNAME，速度快")
         check_geoip = st.checkbox("GeoIP 查詢 (國家/ISP)", value=True, help="查詢 IP 的地理位置，需呼叫外部 API，速度較慢")
         
+        # v15 更新：新增 Security Header 勾選
         check_ssl = st.checkbox("SSL & TLS 憑證", value=True, help="顯示憑證組織、過期日，並檢查 TLS 1.3 支援與舊版 TLS (1.0/1.1) 是否關閉")
-        # 更新：將指定的項目寫入 help 參數
         check_security = st.checkbox("Security Header", value=True, help="檢測項目: Strict-Transport-Security, Content-Security-Policy, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy")
         
         st.subheader("2. 連線測試")
@@ -526,6 +545,7 @@ with tab1:
             else:
                 if skipped_count > 0: st.info(f"⏩ 已自動跳過 {skipped_count} 筆重複資料，本次將掃描 {len(domain_list)} 筆。")
                 
+                # v15 更新：寫入 config
                 config = {
                     'dns': check_dns, 'geoip': check_geoip, 'ssl': check_ssl, 
                     'global_ping': check_global_ping, 'simple_ping': check_simple_ping,
@@ -599,19 +619,20 @@ with tab2:
                 time.sleep(1)
                 st.rerun()
                 
+    # v15 更新：直接在網頁下方顯示反查資料庫內容
     if not df_ips.empty:
         st.divider()
         st.subheader(" 查詢結果預覽")
         st.dataframe(df_ips, use_container_width=True, height=400)
 
 
-# --- 分頁 3: 更新紀錄 ---
+# --- 分頁 3: 更新紀錄 (v15 新增) ---
 with tab3:
     st.header("🔄 更新紀錄")
     st.markdown("""
     ###  v15 版本更新 (Current)
     * **新增安控檢測**：左側「檢測項目」新增 `Security Header` 掃描，可偵測網域是否配置 HSTS, X-Frame-Options, X-Content-Type-Options 等主流安全標頭。
-    * **新增防嵌入判定**：自動利用 `X-Frame-Options` 的值 (DENY/SAMEORIGIN) 判定網站「能否被嵌入」並匯出於報表專屬欄位。
+    * **新增防嵌入判定**：自動利用 `X-Frame-Options` (DENY/SAMEORIGIN) 與 `Content-Security-Policy` (frame-ancestors) 判定網站「能否被嵌入」並匯出於報表專屬欄位。
     * **舊版 TLS 淘汰檢查**：SSL & TLS 憑證模組中，新增 `TLS 1.0 / 1.1` 是否已徹底關閉的偵測功能，並將狀態匯出至報表中的專屬欄位。
     * **反查功能介面優化**：在「IP 反查域名 (VT)」頁籤下方，新增查詢結果的 DataFrame 即時預覽，免去每次都要下載 DB CSV 檔才能看結果的麻煩。
     * **資源整合**：新增「更新紀錄」與「操作手冊」獨立頁籤，幫助維運團隊快速查閱文件與歷史異動。
@@ -623,7 +644,7 @@ with tab3:
     * **v13 版**：導入 SQLite 本地端資料庫，支援「自動跳過已掃描項目」與「斷點續傳」防護機制。
     """)
 
-# --- 分頁 4: 操作手冊 ---
+# --- 分頁 4: 操作手冊 (v15 新增) ---
 with tab4:
     st.header("📖 操作手冊")
     st.markdown("""
