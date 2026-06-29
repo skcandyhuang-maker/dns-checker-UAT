@@ -17,8 +17,8 @@ import urllib3
 # 關閉 SSL 警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# 設定頁面標題
-st.set_page_config(page_title="Andy的全能網管工具 (UAT v15版)", layout="wide")
+# 設定頁面標題 (更新為 v15)
+st.set_page_config(page_title="Andy的全能網管工具 (陸軍 v15版)", layout="wide")
 
 # ==========================================
 #  資料庫 (SQLite) 核心模組
@@ -33,10 +33,18 @@ def init_db():
             domain TEXT PRIMARY KEY,
             cdn_provider TEXT, cloud_hosting TEXT, multi_ip TEXT, cname TEXT, ips TEXT,
             country TEXT, city TEXT, isp TEXT, tls_1_3 TEXT, protocol TEXT, issuer TEXT,
-            ssl_days TEXT, sec_headers TEXT, ssl_labs TEXT, global_ping TEXT, simple_ping TEXT,
+            ssl_days TEXT, global_ping TEXT, simple_ping TEXT,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+    
+    # v15 新增欄位：動態升級現有資料表，若無欄位則自動加上
+    try:
+        c.execute("ALTER TABLE domain_audit ADD COLUMN security_headers TEXT DEFAULT '-'")
+        c.execute("ALTER TABLE domain_audit ADD COLUMN tls_old TEXT DEFAULT '-'")
+    except sqlite3.OperationalError:
+        pass # 欄位已存在則忽略
+
     c.execute('''
         CREATE TABLE IF NOT EXISTS ip_reverse (
             input_ip TEXT, domain TEXT, current_resolved_ip TEXT, ip_match TEXT, http_status TEXT,
@@ -60,17 +68,18 @@ def save_domain_result(data):
     conn = sqlite3.connect(DB_FILE, timeout=30)
     c = conn.cursor()
     try:
+        # v15 更新：加入 security_headers 與 tls_old 寫入
         c.execute('''
             INSERT OR REPLACE INTO domain_audit (
                 domain, cdn_provider, cloud_hosting, multi_ip, cname, ips, 
                 country, city, isp, tls_1_3, protocol, issuer, ssl_days, 
-                sec_headers, ssl_labs, global_ping, simple_ping
+                global_ping, simple_ping, security_headers, tls_old
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             data['Domain'], data['CDN Provider'], data['Cloud/Hosting'], data['Multi-IP'],
             data['CNAME'], data['IPs'], data['Country'], data['City'], data['ISP'],
             data['TLS 1.3'], data['Protocol'], data['Issuer'], str(data['SSL Days']),
-            data['Sec Headers'], data['SSL Labs'], data['Global Ping'], data['Simple Ping']
+            data['Global Ping'], data['Simple Ping'], data['Security Headers'], data['TLS 1.0/1.1']
         ))
         conn.commit()
     except Exception as e: print(f"DB Error: {e}")
@@ -80,12 +89,13 @@ def get_all_domain_results():
     conn = sqlite3.connect(DB_FILE)
     try:
         df = pd.read_sql_query("SELECT * FROM domain_audit", conn)
+        # v15 更新：加入新欄位 Mapping
         df = df.rename(columns={
             "domain": "Domain", "cdn_provider": "CDN Provider", "cloud_hosting": "Cloud/Hosting",
             "multi_ip": "Multi-IP", "cname": "CNAME", "ips": "IPs", "country": "Country", 
             "city": "City", "isp": "ISP", "tls_1_3": "TLS 1.3", "protocol": "Protocol", 
-            "issuer": "Issuer", "ssl_days": "SSL Days", "sec_headers": "Sec Headers",
-            "ssl_labs": "SSL Labs", "global_ping": "Global Ping", "simple_ping": "Simple Ping"
+            "issuer": "Issuer", "ssl_days": "SSL Days", "global_ping": "Global Ping", 
+            "simple_ping": "Simple Ping", "security_headers": "Security Headers", "tls_old": "TLS 1.0/1.1"
         })
         if "updated_at" in df.columns: df = df.drop(columns=["updated_at"])
         return df
@@ -219,6 +229,7 @@ def detect_providers(cname_record, isp_name):
 
     cdn_result = " + ".join(cdns) if cdns else "-"
     cloud_result = " + ".join(clouds) if clouds else "-"
+
     return cdn_result, cloud_result
 
 def run_globalping_api(domain):
@@ -261,43 +272,35 @@ def run_simple_ping(domain):
             return f"⚠️ {resp.status_code} (HTTP)"
         except: return "❌ Fail"
 
-def run_security_headers(domain):
-    url = f"https://securityheaders.com/?q={domain}&hide=on&followRedirects=on"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+# v15 新增功能：Security Headers 檢查
+def check_security_headers(domain):
+    headers_to_check = ['Strict-Transport-Security', 'X-Frame-Options', 'X-Content-Type-Options', 'Content-Security-Policy']
     try:
-        resp = requests.get(url, headers=headers, timeout=10)
-        grade = resp.headers.get('x-grade')
-        if grade:
-            return f"✅ {grade}"
-        match = re.search(r'<div class="score">\s*<span>(.*?)</span>', resp.text)
-        if match:
-            return f"✅ {match.group(1).upper()}"
-        return "⚠️ 未知"
-    except Exception as e:
-        return "❌ Fail"
+        resp = requests.get(f"https://{domain}", timeout=5, verify=False)
+        found = [h for h in headers_to_check if h in resp.headers]
+        return ", ".join(found) if found else "❌ 無"
+    except:
+        return "-"
 
-def run_ssllabs(domain):
-    url = f"https://api.ssllabs.com/api/v3/analyze?host={domain}&fromCache=on&maxAge=24&all=done"
-    headers = {"User-Agent": "Andy-Sec-Audit-Tool"}
-    try:
-        resp = requests.get(url, headers=headers, timeout=10)
-        if resp.status_code == 200:
-            data = resp.json()
-            status = data.get('status')
-            if status == 'READY':
-                endpoints = data.get('endpoints', [])
-                if endpoints and 'grade' in endpoints[0]:
-                    return f"✅ {endpoints[0]['grade']}"
-                return "⚠️ 無法評級"
-            elif status in ['IN_PROGRESS', 'DNS']:
-                return "⏳ 掃描中"
-            elif status == 'ERROR':
-                return "❌ Error"
-            else:
-                return f"⚠️ {status}"
-        return f"❌ API {resp.status_code}"
-    except Exception as e:
-        return "❌ Fail"
+# v15 新增功能：TLS 1.0 / 1.1 關閉測試
+def check_legacy_tls(domain):
+    opened = []
+    for ver_name, tls_ver in [("TLS 1.0", ssl.TLSVersion.TLSv1), ("TLS 1.1", ssl.TLSVersion.TLSv1_1)]:
+        try:
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            ctx.minimum_version = tls_ver
+            ctx.maximum_version = tls_ver
+            with socket.create_connection((domain, 443), timeout=3) as sock:
+                with ctx.wrap_socket(sock, server_hostname=domain):
+                    opened.append(ver_name)
+        except:
+            pass # 連線失敗代表已關閉或不支援
+            
+    if not opened:
+        return "✅ 皆已關閉"
+    return f"❌ 未關閉 ({', '.join(opened)})"
 
 def process_domain_audit(args):
     index, domain, config = args
@@ -305,7 +308,8 @@ def process_domain_audit(args):
         "Domain": domain, "CDN Provider": "-", "Cloud/Hosting": "-", "Multi-IP": "-",
         "CNAME": "-", "IPs": "-", "Country": "-", "City": "-", "ISP": "-",
         "TLS 1.3": "-", "Protocol": "-", "Issuer": "-", "SSL Days": "-", 
-        "Sec Headers": "-", "SSL Labs": "-", "Global Ping": "-", "Simple Ping": "-"
+        "Global Ping": "-", "Simple Ping": "-", 
+        "Security Headers": "-", "TLS 1.0/1.1": "-" # v15 新增預設值
     }
     if "未找到" in domain:
         result["IPs"] = "❌ Source Not Found"
@@ -315,7 +319,7 @@ def process_domain_audit(args):
         return (index, result)
 
     try:
-        if config.get('dns'):
+        if config['dns']:
             resolver = get_dns_resolver()
             try:
                 cname_ans = resolver.resolve(domain, 'CNAME')
@@ -333,22 +337,26 @@ def process_domain_audit(args):
             if ip_list:
                 result["IPs"] = ", ".join(ip_list)
                 if len(ip_list) > 1: result["Multi-IP"] = f"✅ Yes ({len(ip_list)})"
-                if config.get('geoip'):
+                if config['geoip']:
                     first_ip = ip_list[0]
                     if not first_ip.endswith('.'):
                         for attempt in range(3):
                             try:
                                 time.sleep(random.uniform(0.5, 1.5))
                                 resp = requests.get(f"http://ip-api.com/json/{first_ip}?fields=country,city,isp,org,status", timeout=5).json()
+                                
                                 if resp.get("status") == "success":
                                     result["Country"] = resp.get("country", "-")
                                     result["City"] = resp.get("city", "-")
+                                    
                                     isp_val = resp.get("isp", "")
                                     org_val = resp.get("org", "")
+                                    
                                     if isp_val and org_val and isp_val != org_val:
                                         full_isp = f"{isp_val} ({org_val})"
                                     else:
                                         full_isp = org_val or isp_val or "-"
+                                        
                                     result["ISP"] = full_isp
                                     break
                             except: time.sleep(1)
@@ -357,7 +365,7 @@ def process_domain_audit(args):
                 result["Cloud/Hosting"] = cloud
             else: result["IPs"] = "No Record"
 
-        if config.get('ssl'):
+        if config['ssl']:
             ctx = ssl.create_default_context()
             ctx.check_hostname = False
             ctx.verify_mode = ssl.CERT_NONE
@@ -365,8 +373,10 @@ def process_domain_audit(args):
             try:
                 sock = socket.create_connection((domain, 443), timeout=5)
                 conn = ctx.wrap_socket(sock, server_hostname=domain)
+                
                 result["Protocol"] = conn.version()
                 result["TLS 1.3"] = "✅ Yes" if conn.version() == 'TLSv1.3' else "❌ No"
+                
                 cert = crypto.load_certificate(crypto.FILETYPE_ASN1, conn.getpeercert(binary_form=True))
                 issuer_obj = cert.get_issuer()
                 result["Issuer"] = issuer_obj.O if issuer_obj.O else (issuer_obj.CN if issuer_obj.CN else "Unknown")
@@ -375,11 +385,16 @@ def process_domain_audit(args):
             except: result["Protocol"] = "Connect Fail"
             finally:
                 if conn: conn.close()
+                
+            # v15 新增：檢測舊版 TLS
+            result["TLS 1.0/1.1"] = check_legacy_tls(domain)
 
-        if config.get('global_ping'): result["Global Ping"] = run_globalping_api(domain)
-        if config.get('simple_ping'): result["Simple Ping"] = run_simple_ping(domain)
-        if config.get('sec_headers'): result["Sec Headers"] = run_security_headers(domain)
-        if config.get('ssllabs'): result["SSL Labs"] = run_ssllabs(domain)
+        # v15 新增：檢測 Security Headers
+        if config['security_header']:
+            result["Security Headers"] = check_security_headers(domain)
+
+        if config['global_ping']: result["Global Ping"] = run_globalping_api(domain)
+        if config['simple_ping']: result["Simple Ping"] = run_simple_ping(domain)
 
     except Exception as e: result["IPs"] = str(e)
     return (index, result)
@@ -450,39 +465,41 @@ with st.sidebar:
         st.download_button(f"📄 下載 IP 反查報告 ({len(df_ips)}筆)", df_ips.to_csv(index=False).encode('utf-8-sig'), "ip_reverse_db.csv", "text/csv")
     else: st.write("IP 反查資料庫為空")
 
-tab1, tab2 = st.tabs(["🌐 域名檢測", "🔍 IP 反查域名 (VT)"])
+# v15 更新：擴增為 4 個分頁
+tab1, tab2, tab3, tab4 = st.tabs([" 域名檢測", " IP 反查域名 (VT)", " 更新紀錄", " 操作手冊"])
 
 # --- 分頁 1: 域名檢測 ---
 with tab1:
-    st.header("Andy 的批量域名體檢工具 - UAT v15版")
+    st.header("Andy 的批量域名體檢工具-陸軍 v15版")
     col1, col2 = st.columns([1, 3])
     with col1:
         st.subheader("1. 檢測項目")
         check_dns = st.checkbox("DNS 解析 (基礎)", value=True, help="解析 A 紀錄與 CNAME，速度快")
         check_geoip = st.checkbox("GeoIP 查詢 (國家/ISP)", value=True, help="查詢 IP 的地理位置，需呼叫外部 API，速度較慢")
-        check_ssl = st.checkbox("SSL & TLS 憑證", value=True, help="顯示憑證組織 (O)、過期日與 TLS 1.3 支援")
         
-        st.subheader("2. 第三方資安評級")
-        check_sec_headers = st.checkbox("Security Headers", value=False, help="查詢 securityheaders.com 評級 (A+ ~ F)")
-        check_ssllabs = st.checkbox("SSL Labs (快取優先)", value=False, help="查詢 ssllabs.com 評級。為保持極速，若無 24hr 內快取將觸發背景掃描，請稍後重查。")
+        # v15 更新：新增 Security Header 勾選
+        check_ssl = st.checkbox("SSL & TLS 憑證", value=True, help="顯示憑證組織、過期日，並檢查 TLS 1.3 支援與舊版 TLS (1.0/1.1) 是否關閉")
+        check_security = st.checkbox("Security Header", value=True, help="檢測常見安全標頭 (如 HSTS, X-Frame-Options 等)")
         
-        st.subheader("3. 連線測試")
+        st.subheader("2. 連線測試")
         check_simple_ping = st.checkbox("Simple Ping (本機)", value=True, help="從目前主機發送請求，適合內網或本機測試")
         check_global_ping = st.checkbox("Global Ping (全球)", value=True, help="透過 API 從國外節點測試，速度較慢")
         
         st.divider()
-        st.subheader("4. 掃描速度")
+        st.subheader("3. 掃描速度")
         workers = st.slider("併發執行緒", 1, 5, 3)
         
-        st.info("💡 速度設定建議：\n"
-                "* **(注意！ 併發數超過1，導出順序會是亂的!)**\n"
-                "* **1-2 (龜速)**：適合 1000+ 筆資料。\n"
-                "* **3 (平衡)**：適合 100-500 筆資料。\n"
-                "* **4-5 (極速)**：適合 <100 筆資料。")
+        st.info("💡 速度設定建議：")
+        st.markdown("""
+        * **(注意！ 併發數超過 1 ， 導出順序會是亂的!)**
+        * **1-2 (龜速)**：適合 **1000+** 筆資料。保證 GeoIP 不會被封鎖。
+        * **3 (平衡)**：適合 **100-500** 筆資料。
+        * **4-5 (極速)**：適合 **<100** 筆資料。
+        """)
 
     with col2:
         raw_input = st.text_area("輸入域名 (會自動跳過已掃描項目)", height=150, placeholder="example.com\nwww.google.com")
-        if st.button("🚀 開始掃描域名", type="primary"):
+        if st.button(" 開始掃描域名", type="primary"):
             full_list = parse_input_raw(raw_input)
             existing_domains = get_existing_domains()
             domain_list = [d for d in full_list if d not in existing_domains]
@@ -494,10 +511,11 @@ with tab1:
             else:
                 if skipped_count > 0: st.info(f"⏩ 已自動跳過 {skipped_count} 筆重複資料，本次將掃描 {len(domain_list)} 筆。")
                 
+                # v15 更新：寫入 config
                 config = {
                     'dns': check_dns, 'geoip': check_geoip, 'ssl': check_ssl, 
                     'global_ping': check_global_ping, 'simple_ping': check_simple_ping,
-                    'sec_headers': check_sec_headers, 'ssllabs': check_ssllabs
+                    'security_header': check_security
                 }
                 
                 indexed_domains = list(enumerate(domain_list))
@@ -519,7 +537,7 @@ with tab1:
 
     if not df_domains.empty:
         st.divider()
-        st.subheader("📊 檢測結果預覽")
+        st.subheader(" 檢測結果預覽")
         st.dataframe(df_domains, use_container_width=True, height=400)
 
 
@@ -528,7 +546,7 @@ with tab2:
     st.header("IP 反查與存活驗證 (DB 自動存檔)")
     api_key = st.text_input("請輸入 VirusTotal API Key", type="password")
     ip_input = st.text_area("輸入 IP 清單", height=150, placeholder="8.8.8.8")
-    if st.button("🔍 開始反查 IP", type="primary"):
+    if st.button(" 開始反查 IP", type="primary"):
         if not api_key: st.error("請輸入 API Key！")
         else:
             ip_list = parse_input_raw(ip_input)
@@ -566,3 +584,36 @@ with tab2:
                 st.balloons()
                 time.sleep(1)
                 st.rerun()
+                
+    # v15 更新：直接在網頁下方顯示反查資料庫內容
+    if not df_ips.empty:
+        st.divider()
+        st.subheader(" 查詢結果預覽")
+        st.dataframe(df_ips, use_container_width=True, height=400)
+
+
+# --- 分頁 3: 更新紀錄 (v15 新增) ---
+with tab3:
+    st.header("🔄 更新紀錄")
+    st.markdown("""
+    ###  v15 版本更新 (Current)
+    * **新增安控檢測**：左側「檢測項目」新增 `Security Header` 掃描，可偵測網域是否配置 HSTS, X-Frame-Options, X-Content-Type-Options 等主流安全標頭。
+    * **舊版 TLS 淘汰檢查**：SSL & TLS 憑證模組中，新增 `TLS 1.0 / 1.1` 是否已徹底關閉的偵測功能，並將狀態匯出至報表中的專屬欄位。
+    * **反查功能介面優化**：在「IP 反查域名 (VT)」頁籤下方，新增查詢結果的 DataFrame 即時預覽，免去每次都要下載 DB CSV 檔才能看結果的麻煩。
+    * **資源整合**：新增「更新紀錄」與「操作手冊」獨立頁籤，幫助維運團隊快速查閱文件與歷史異動。
+    
+    ---
+    
+    ### ⏪ 歷史版本回顧
+    * **v14 版**：優化 GeoIP 判斷邏輯，解決組織 (Org) 與 ISP 名稱重複顯示的問題；新增域名檢測結果 DataFrame 直接預覽功能。
+    * **v13 版**：導入 SQLite 本地端資料庫，支援「自動跳過已掃描項目」與「斷點續傳」防護機制。
+    """)
+
+# --- 分頁 4: 操作手冊 (v15 新增) ---
+with tab4:
+    st.header("📖 操作手冊")
+    st.markdown("""
+    如需深入了解工具的操作步驟、各項檢測參數說明與排錯指南，請參閱線上版操作手冊。
+    
+    👉 **[點擊此處查看：Andy 的批量域名體檢工具 - 操作手冊](https://hackmd.io/@iPQqj0f3SIqBCfug7yl49Q/rJq9Gzgmfl)**
+    """)
