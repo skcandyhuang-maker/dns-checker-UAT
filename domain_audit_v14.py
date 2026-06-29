@@ -174,7 +174,7 @@ def detect_providers(cname_record, isp_name):
     clouds = []
     
     cdn_sigs = {
-        "騰雲運算 Skycloud": ["skycloud",["gocname"],
+        "騰雲運算 Skycloud": ["skycloud", "gocname"],
         "AWS CloudFront": ["cloudfront"],
         "Cloudflare": ["cloudflare", "cdn.cloudflare.net"],
         "Azure FrontDoor/CDN": ["azurefd", "azureedge", "msecnd", "trafficmanager"],
