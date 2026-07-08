@@ -163,7 +163,7 @@ def parse_input_raw(raw_text):
         if clean: final_items.append(clean)
     return final_items
 
-# 新增：解析輸入時，額外保留使用者輸入的「完整 URL」，供「能否被嵌入」判定使用
+# 新增：解析輸入時，額外保留使用者輸入的「完整 URL」，供「Security Headers」與「能否被嵌入」判定使用
 # (若使用者只輸入裸域名，則 full_url 會退回 https://domain，其餘欄位判定邏輯完全不受影響)
 def parse_input_with_url(raw_text):
     processed_text = re.sub(r'(\.[a-z]{2,5})(www\.|http)', r'\1\n\2', raw_text, flags=re.IGNORECASE)
@@ -298,15 +298,15 @@ def run_simple_ping(domain):
             return f"⚠️ {resp.status_code} (HTTP)"
         except: return "❌ Fail"
 
-# 更新：僅負責偵測 6 大 Security Headers 是否存在 (與能否被嵌入判定拆開)
-def check_security_headers(domain):
+# 更新：僅負責偵測 6 大 Security Headers 是否存在 (改用「域名內的完整 URL」檢測)
+def check_security_headers(url):
     headers_to_check = [
         'Strict-Transport-Security', 'Content-Security-Policy',
         'X-Frame-Options', 'X-Content-Type-Options',
         'Referrer-Policy', 'Permissions-Policy'
     ]
     try:
-        resp = requests.get(f"https://{domain}", timeout=5, verify=False)
+        resp = requests.get(url, timeout=5, verify=False)
         found = [h for h in headers_to_check if h in resp.headers]
         return ", ".join(found) if found else "❌ 無"
     except:
@@ -451,9 +451,9 @@ def process_domain_audit(args):
             # v15 新增：檢測舊版 TLS
             result["TLS 1.0/1.1"] = check_legacy_tls(domain)
 
-        # v15 新增：檢測 Security Headers 與能否被嵌入 (能否被嵌入改用完整 URL 檢測)
+        # v15 新增：檢測 Security Headers 與能否被嵌入 (兩者皆改用完整 URL 檢測)
         if config['security_header']:
-            result["Security Headers"] = check_security_headers(domain)
+            result["Security Headers"] = check_security_headers(url)
             result["能否被嵌入"] = check_embeddable(url)
 
         if config['global_ping']: result["Global Ping"] = run_globalping_api(domain)
@@ -565,7 +565,7 @@ with tab1:
             "輸入域名 (會自動跳過已掃描項目)",
             height=150,
             placeholder="https://example.com/index.html\nwww.google.com",
-            help="若要精準判斷「能否被嵌入」，請輸入該域名內的完整 URL (含路徑)；若只輸入裸域名，能否被嵌入將以該域名首頁判定。其餘檢測項目 (DNS/SSL/Ping 等) 一律以域名本身為準，不受路徑影響。"
+            help="若要精準判斷「Security Headers」與「能否被嵌入」，請輸入該域名內的完整 URL (含路徑)；若只輸入裸域名，則以該域名首頁判定。其餘檢測項目 (DNS/SSL/Ping 等) 一律以域名本身為準，不受路徑影響。"
         )
         if st.button(" 開始掃描域名", type="primary"):
             parsed_pairs = parse_input_with_url(raw_input)
