@@ -44,6 +44,8 @@ def init_db():
         c.execute("ALTER TABLE domain_audit ADD COLUMN tls_old TEXT DEFAULT '-'")
         # 這次新增的欄位
         c.execute("ALTER TABLE domain_audit ADD COLUMN can_be_embedded TEXT DEFAULT '-'")
+        # 新增：獨立的 Server 標頭偵測欄位 (與 security_headers 分開)
+        c.execute("ALTER TABLE domain_audit ADD COLUMN server_header TEXT DEFAULT '-'")
     except sqlite3.OperationalError:
         pass # 欄位已存在則忽略
 
@@ -70,18 +72,19 @@ def save_domain_result(data):
     conn = sqlite3.connect(DB_FILE, timeout=30)
     c = conn.cursor()
     try:
-        # v15 更新：加入 security_headers, tls_old 與 can_be_embedded 寫入
+        # v15 更新：加入 security_headers, tls_old, can_be_embedded 與 server_header 寫入
         c.execute('''
             INSERT OR REPLACE INTO domain_audit (
                 domain, cdn_provider, cloud_hosting, multi_ip, cname, ips,
                 country, city, isp, tls_1_3, protocol, issuer, ssl_days,
-                global_ping, simple_ping, security_headers, tls_old, can_be_embedded
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                global_ping, simple_ping, security_headers, tls_old, can_be_embedded, server_header
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             data['Domain'], data['CDN Provider'], data['Cloud/Hosting'], data['Multi-IP'],
             data['CNAME'], data['IPs'], data['Country'], data['City'], data['ISP'],
             data['TLS 1.3'], data['Protocol'], data['Issuer'], str(data['SSL Days']),
-            data['Global Ping'], data['Simple Ping'], data['Security Headers'], data['TLS 1.0/1.1'], data['能否被嵌入']
+            data['Global Ping'], data['Simple Ping'], data['Security Headers'], data['TLS 1.0/1.1'],
+            data['能否被嵌入'], data['Server Header']
         ))
         conn.commit()
     except Exception as e: print(f"DB Error: {e}")
@@ -98,7 +101,7 @@ def get_all_domain_results():
             "city": "City", "isp": "ISP", "tls_1_3": "TLS 1.3", "protocol": "Protocol",
             "issuer": "Issuer", "ssl_days": "SSL Days", "global_ping": "Global Ping",
             "simple_ping": "Simple Ping", "security_headers": "Security Headers", "tls_old": "TLS 1.0/1.1",
-            "can_be_embedded": "能否被嵌入"
+            "can_be_embedded": "能否被嵌入", "server_header": "Server Header"
         })
         if "updated_at" in df.columns: df = df.drop(columns=["updated_at"])
         return df
@@ -163,7 +166,7 @@ def parse_input_raw(raw_text):
         if clean: final_items.append(clean)
     return final_items
 
-# 新增：解析輸入時，額外保留使用者輸入的「完整 URL」，供「Security Headers」與「能否被嵌入」判定使用
+# 新增：解析輸入時，額外保留使用者輸入的「完整 URL」，供「Security Headers」、「Server Header」與「能否被嵌入」判定使用
 # (若使用者只輸入裸域名，則 full_url 會退回 https://domain，其餘欄位判定邏輯完全不受影響)
 def parse_input_with_url(raw_text):
     processed_text = re.sub(r'(\.[a-z]{2,5})(www\.|http)', r'\1\n\2', raw_text, flags=re.IGNORECASE)
@@ -312,6 +315,15 @@ def check_security_headers(url):
     except:
         return "-"
 
+# 新增：獨立的 Server 標頭偵測 (只抓 Server 這個 header，不與 Security Header 合併匯出)
+def check_server_header(url):
+    try:
+        resp = requests.get(url, timeout=5, verify=False)
+        server = resp.headers.get('Server', '')
+        return server if server else "❌ 無"
+    except:
+        return "-"
+
 # 新增：能否被嵌入判定，改用「域名內的完整 URL」發送請求 (不再固定打網域根目錄 https://domain)
 def check_embeddable(url):
     try:
@@ -371,7 +383,7 @@ def process_domain_audit(args):
         "CNAME": "-", "IPs": "-", "Country": "-", "City": "-", "ISP": "-",
         "TLS 1.3": "-", "Protocol": "-", "Issuer": "-", "SSL Days": "-",
         "Global Ping": "-", "Simple Ping": "-",
-        "Security Headers": "-", "TLS 1.0/1.1": "-", "能否被嵌入": "-"
+        "Security Headers": "-", "TLS 1.0/1.1": "-", "能否被嵌入": "-", "Server Header": "-"
     }
     if "未找到" in domain:
         result["IPs"] = "❌ Source Not Found"
@@ -455,6 +467,10 @@ def process_domain_audit(args):
         if config['security_header']:
             result["Security Headers"] = check_security_headers(url)
             result["能否被嵌入"] = check_embeddable(url)
+
+        # 新增：獨立的 Server 標頭偵測 (獨立於 Security Header 判定與匯出)
+        if config['server_header']:
+            result["Server Header"] = check_server_header(url)
 
         if config['global_ping']: result["Global Ping"] = run_globalping_api(domain)
         if config['simple_ping']: result["Simple Ping"] = run_simple_ping(domain)
@@ -543,6 +559,8 @@ with tab1:
         # v15 更新：新增 Security Header 勾選
         check_ssl = st.checkbox("SSL & TLS 憑證", value=True, help="顯示憑證組織、過期日，並檢查 TLS 1.3 支援與舊版 TLS (1.0/1.1) 是否關閉")
         check_security = st.checkbox("Security Header", value=True, help="檢測項目: Strict-Transport-Security, Content-Security-Policy, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy")
+        # 新增：獨立的 Server 標頭偵測勾選 (放在 Security Header 底下)
+        check_server = st.checkbox("Server 標頭偵測", value=True, help="獨立偵測並匯出 HTTP 回應中的 Server 標頭 (可看出伺服器軟體/版本，如 nginx, Apache, cloudflare 等)，不與 Security Header 合併匯出。")
 
         st.subheader("2. 連線測試")
         check_simple_ping = st.checkbox("Simple Ping (本機)", value=True, help="從目前主機發送請求，適合內網或本機測試")
@@ -565,7 +583,7 @@ with tab1:
             "輸入域名 (會自動跳過已掃描項目)",
             height=150,
             placeholder="https://example.com/index.html\nwww.google.com",
-            help="若要精準判斷「Security Headers」與「能否被嵌入」，請輸入該域名內的完整 URL (含路徑)；若只輸入裸域名，則以該域名首頁判定。其餘檢測項目 (DNS/SSL/Ping 等) 一律以域名本身為準，不受路徑影響。"
+            help="若要精準判斷「Security Headers」、「Server 標頭」與「能否被嵌入」，請輸入該域名內的完整 URL (含路徑)；若只輸入裸域名，則以該域名首頁判定。其餘檢測項目 (DNS/SSL/Ping 等) 一律以域名本身為準，不受路徑影響。"
         )
         if st.button(" 開始掃描域名", type="primary"):
             parsed_pairs = parse_input_with_url(raw_input)
@@ -587,7 +605,7 @@ with tab1:
                 config = {
                     'dns': check_dns, 'geoip': check_geoip, 'ssl': check_ssl,
                     'global_ping': check_global_ping, 'simple_ping': check_simple_ping,
-                    'security_header': check_security
+                    'security_header': check_security, 'server_header': check_server
                 }
 
                 indexed_domains = list(enumerate(domain_list))
