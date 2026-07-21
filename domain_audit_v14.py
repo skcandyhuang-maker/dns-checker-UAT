@@ -39,15 +39,18 @@ def init_db():
     ''')
 
     # v15 新增欄位：動態升級現有資料表，若無欄位則自動加上
-    try:
-        c.execute("ALTER TABLE domain_audit ADD COLUMN security_headers TEXT DEFAULT '-'")
-        c.execute("ALTER TABLE domain_audit ADD COLUMN tls_old TEXT DEFAULT '-'")
-        # 這次新增的欄位
-        c.execute("ALTER TABLE domain_audit ADD COLUMN can_be_embedded TEXT DEFAULT '-'")
-        # 新增：獨立的 Server 標頭偵測欄位 (與 security_headers 分開)
-        c.execute("ALTER TABLE domain_audit ADD COLUMN server_header TEXT DEFAULT '-'")
-    except sqlite3.OperationalError:
-        pass # 欄位已存在則忽略
+    # 修正：每個 ALTER 各自獨立 try/except，避免某一欄「已存在」的例外
+    # 連帶擋住後面尚未新增的欄位 (例如舊 DB 已有前三欄，但還沒有 server_header)
+    for col_sql in [
+        "ALTER TABLE domain_audit ADD COLUMN security_headers TEXT DEFAULT '-'",
+        "ALTER TABLE domain_audit ADD COLUMN tls_old TEXT DEFAULT '-'",
+        "ALTER TABLE domain_audit ADD COLUMN can_be_embedded TEXT DEFAULT '-'",
+        "ALTER TABLE domain_audit ADD COLUMN server_header TEXT DEFAULT '-'",
+    ]:
+        try:
+            c.execute(col_sql)
+        except sqlite3.OperationalError:
+            pass # 欄位已存在則忽略
 
     c.execute('''
         CREATE TABLE IF NOT EXISTS ip_reverse (
