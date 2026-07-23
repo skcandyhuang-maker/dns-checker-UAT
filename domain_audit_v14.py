@@ -208,7 +208,7 @@ def detect_providers(cname_record, isp_name):
         "Azure FrontDoor/CDN": ["azurefd", "azureedge", "msecnd", "trafficmanager"],
         "Akamai": ["akamai", "edgekey", "akamaiedge"],
         "Fastly": ["fastly", "fastly.net"],
-        "Imperva (Incapsula)": ["incapdns", "imperva"],
+        "Imperva (Incapsula)": ["incapdns", "imperva", "incapsula"],
         "Edgio (Edgecast/Limelight)": ["edgecast", "systemcdn", "llnwd", "limelight"],
         "StackPath (MaxCDN)": ["stackpath", "maxcdn"],
         "Sucuri WAF": ["sucuri"],
