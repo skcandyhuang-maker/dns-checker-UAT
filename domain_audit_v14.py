@@ -716,4 +716,4 @@ with tab5:
     st.header("⚠️ 惡意網站模擬 (Clickjacking 測試工具)")
     st.caption("整合外部測試工具，用於示範/驗證目標網站是否容易遭受 Clickjacking (點擊劫持) 攻擊。")
     st.markdown("🔗 [如果下方畫面無法顯示，點此在新分頁開啟](https://skcandyhuang-maker.github.io/clickjacking_normal/)")
-    components.iframe("https://skcandyhuang-maker.github.io/clickjacking_normal/", height=800, scrolling=True)
+    components.iframe("https://skcandyhuang-maker.github.io/clickjacking_normal/", height=1200, scrolling=True)
