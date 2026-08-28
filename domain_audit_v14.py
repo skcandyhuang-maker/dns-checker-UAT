@@ -18,8 +18,8 @@ import urllib3
 # 關閉 SSL 警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# 設定頁面標題 (更新為 v15)
-st.set_page_config(page_title="Andy的全能網管工具 (UAT v15版)", layout="wide")
+# 設定頁面標題 (更新為 v16)
+st.set_page_config(page_title="Andy的全能網管工具 (UAT v16版)", layout="wide")
 
 # ==========================================
 #  資料庫 (SQLite) 核心模組
@@ -553,7 +553,7 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([" 域名檢測", " IP 反查域名 (VT)"
 
 # --- 分頁 1: 域名檢測 ---
 with tab1:
-    st.header("騰雲運算批量域名體檢工具-UAT v15版")
+    st.header("騰雲運算批量域名體檢工具-UAT v16版")
     col1, col2 = st.columns([1, 3])
     with col1:
         st.subheader("1. 檢測項目")
@@ -690,16 +690,14 @@ with tab2:
 with tab3:
     st.header("🔄 更新紀錄")
     st.markdown("""
-    ###  v15 版本更新 (Current)
-    * **新增安控檢測**：左側「檢測項目」新增 `Security Header` 掃描，可偵測網域是否配置 HSTS, X-Frame-Options, X-Content-Type-Options 等主流安全標頭。
-    * **新增防嵌入判定**：自動利用 `X-Frame-Options` (DENY/SAMEORIGIN) 與 `Content-Security-Policy` (frame-ancestors) 判定網站「能否被嵌入」並匯出於報表專屬欄位。
-    * **舊版 TLS 淘汰檢查**：SSL & TLS 憑證模組中，新增 `TLS 1.0 / 1.1` 是否已徹底關閉的偵測功能，並將狀態匯出至報表中的專屬欄位。
-    * **反查功能介面優化**：在「IP 反查域名 (VT)」頁籤下方，新增查詢結果的 DataFrame 即時預覽，免去每次都要下載 DB CSV 檔才能看結果的麻煩。
-    * **資源整合**：新增「更新紀錄」與「操作手冊」獨立頁籤，幫助業務團隊快速查閱文件與歷史異動。
+    ###  v16 版本更新 (Current)
+    * **新增 Host 探測**：獨立於 Security Header 判定與匯出之外，新增偵測並匯出 HTTP 回應中的 `Server` 標頭 (Host 主機/伺服器資訊)，可看出伺服器軟體與版本 (如 nginx, Apache, cloudflare 等)，結果單獨存成報表專屬欄位。
+    * **新增惡意網站模擬**：新增獨立頁籤，整合外部 Clickjacking 測試工具，可直接在頁面內嵌入模擬畫面，用於示範/驗證目標網站是否容易遭受點擊劫持攻擊。
 
     ---
 
     ### ⏪ 歷史版本回顧
+    * **v15 版**：新增 Security Header 掃描與防嵌入判定 (能否被嵌入)，並改為可用完整 URL (含路徑) 精準檢測；新增舊版 TLS (1.0/1.1) 淘汰檢查；IP 反查頁籤新增結果即時預覽；新增「更新紀錄」與「操作手冊」獨立頁籤。
     * **v14 版**：優化 GeoIP 判斷邏輯，解決組織 (Org) 與 ISP 名稱重複顯示的問題；新增域名檢測結果 DataFrame 直接預覽功能。
     * **v13 版**：導入 SQLite 本地端資料庫，支援「自動跳過已掃描項目」與「斷點續傳」防護機制。
     """)
