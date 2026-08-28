@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import dns.resolver
 import requests
@@ -547,8 +548,8 @@ with st.sidebar:
         st.download_button(f"📄 下載 IP 反查報告 ({len(df_ips)}筆)", df_ips.to_csv(index=False).encode('utf-8-sig'), "ip_reverse_db.csv", "text/csv")
     else: st.write("IP 反查資料庫為空")
 
-# v15 更新：擴增為 4 個分頁
-tab1, tab2, tab3, tab4 = st.tabs([" 域名檢測", " IP 反查域名 (VT)", " 更新紀錄", " 操作手冊"])
+# v15 更新：擴增為 5 個分頁 (新增惡意網站模擬)
+tab1, tab2, tab3, tab4, tab5 = st.tabs([" 域名檢測", " IP 反查域名 (VT)", " 更新紀錄", " 操作手冊", "⚠️ 惡意網站模擬"])
 
 # --- 分頁 1: 域名檢測 ---
 with tab1:
@@ -711,3 +712,10 @@ with tab4:
 
     👉 **[點擊此處查看：Andy 的批量域名體檢工具 - 操作手冊](https://hackmd.io/@iPQqj0f3SIqBCfug7yl49Q/rJq9Gzgmfl)**
     """)
+
+# --- 分頁 5: 惡意網站模擬 (新增) ---
+with tab5:
+    st.header("⚠️ 惡意網站模擬 (Clickjacking 測試工具)")
+    st.caption("整合外部測試工具，用於示範/驗證目標網站是否容易遭受 Clickjacking (點擊劫持) 攻擊。")
+    st.markdown("🔗 [如果下方畫面無法顯示，點此在新分頁開啟](https://skcandyhuang-maker.github.io/clickjacking_normal/)")
+    components.iframe("https://skcandyhuang-maker.github.io/clickjacking_normal/", height=800, scrolling=True)
