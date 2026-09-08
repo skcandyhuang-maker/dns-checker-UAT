@@ -407,9 +407,10 @@ def check_embeddable(url, follow_meta_refresh=True):
 def check_redirect_path(url, follow_meta_refresh=True):
     try:
         resp = resolve_final_response(url, follow_meta_refresh)
-        if resp.url != url:
+        # 去掉結尾斜線再比較，只有補一條 "/" 不算數，要真的跳到不同路徑才顯示
+        if resp.url.rstrip('/') != url.rstrip('/'):
             return resp.url
-        return "(無跳轉)"
+        return "-"
     except:
         return "-"
 
