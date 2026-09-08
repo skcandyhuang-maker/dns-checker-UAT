@@ -325,17 +325,21 @@ def run_simple_ping(url):
 # 像 <meta http-equiv="refresh" content="0;URL=..."> 這種寫在網頁內容裡的「假轉址」，
 # 瀏覽器看得懂但 requests 不會自動跟，這裡手動解析、跟隨 (最多 5 層避免無窮迴圈)。
 # follow_meta_refresh=False 時完全不解析內容，只發一次請求，等同於原本的行為。
+# 修正：帶上跟 run_simple_ping 一樣的瀏覽器 User-Agent —— 不少 CDN/WAF 會直接擋
+# 「一看就是程式庫」的 UA (例如 python-requests)，導致還沒走到真正的轉址就先被擋下 401。
+_BROWSER_UA_HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+
 def resolve_final_response(url, follow_meta_refresh=True, max_hops=5):
     current_url = url
     resp = None
     for _ in range(max_hops):
         try:
-            resp = requests.get(current_url, timeout=5, verify=False)
+            resp = requests.get(current_url, timeout=5, verify=False, headers=_BROWSER_UA_HEADERS)
         except requests.exceptions.ConnectionError:
             # 現代瀏覽器遇到 http:// 連不上時會自動改用 https:// 重試一次，這裡比照辦理
             if current_url.startswith('http://'):
                 current_url = current_url.replace('http://', 'https://', 1)
-                resp = requests.get(current_url, timeout=5, verify=False)
+                resp = requests.get(current_url, timeout=5, verify=False, headers=_BROWSER_UA_HEADERS)
             else:
                 raise
         if not follow_meta_refresh:
@@ -407,7 +411,7 @@ def check_embeddable(url, follow_meta_refresh=True):
 def check_redirect_path(url, follow_meta_refresh=True):
     try:
         resp = resolve_final_response(url, follow_meta_refresh)
-        # 去掉結尾斜線再比較，只有補一條 "/" 不算數，要真的跳到不同路徑才顯示
+        # 去掉結尾斜線再比較，只是補上根目錄的 "/" 不算數，要真的跳到不同路徑才顯示
         if resp.url.rstrip('/') != url.rstrip('/'):
             return resp.url
         return "-"
