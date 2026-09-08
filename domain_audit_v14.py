@@ -628,11 +628,6 @@ with tab1:
         check_security = st.checkbox("Security Header", value=True, help="檢測項目: Strict-Transport-Security, Content-Security-Policy, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy；同時一併判定「能否被嵌入」與「跳轉後路徑」")
         # 新增：獨立的 Server 標頭偵測勾選 (放在 Security Header 底下)
         check_server = st.checkbox("Server 標頭偵測", value=True, help="獨立偵測並匯出 HTTP 回應中的 Server 標頭 (可看出伺服器軟體/版本，如 nginx, Apache, cloudflare 等)，不與 Security Header 合併匯出。")
-        # 新增：是否跟隨 meta refresh 這種網頁層級的假轉址
-        check_meta_refresh = st.checkbox(
-            "跟隨 Meta Refresh 轉址", value=True,
-            help='有些網站的轉址寫在網頁內容的 <meta http-equiv="refresh"> 標籤裡，是瀏覽器認得、但 requests 套件不會自動跟隨的「假轉址」。勾選後，Security Headers／Server Header／能否被嵌入／跳轉後路徑都會改用跟隨完之後的最終頁面判斷；沒勾則只看第一個回應。'
-        )
 
         st.subheader("2. 連線測試")
         check_simple_ping = st.checkbox("Simple Ping (本機)", value=True, help="從目前主機發送請求，適合內網或本機測試")
@@ -657,7 +652,16 @@ with tab1:
             placeholder="https://example.com/index.html\nwww.google.com",
             help="若要精準判斷「Security Headers」、「Server 標頭」、「能否被嵌入」、「跳轉後路徑」與「Simple Ping」，請輸入該域名內的完整 URL (含路徑)；若只輸入裸域名，則以該域名首頁判定。其餘檢測項目 (DNS/SSL 等) 一律以域名本身為準，不受路徑影響。"
         )
-        if st.button(" 開始掃描域名", type="primary"):
+        btn_col, opt_col = st.columns([1, 2])
+        with btn_col:
+            start_scan = st.button(" 開始掃描域名", type="primary")
+        with opt_col:
+            # 新增：是否跟隨 meta refresh 這種網頁層級的假轉址 (移到掃描按鈕旁邊)
+            check_meta_refresh = st.checkbox(
+                "跟隨 Meta Refresh 轉址", value=True,
+                help='有些網站的轉址寫在網頁內容的 <meta http-equiv="refresh"> 標籤裡，是瀏覽器認得、但 requests 套件不會自動跟隨的「假轉址」。勾選後，Security Headers／Server Header／能否被嵌入／跳轉後路徑都會改用跟隨完之後的最終頁面判斷；沒勾則只看第一個回應。'
+            )
+        if start_scan:
             parsed_pairs = parse_input_with_url(raw_input)
             full_list = [d for d, _ in parsed_pairs]
             url_map = {}
