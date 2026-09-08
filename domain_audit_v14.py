@@ -12,6 +12,7 @@ import re
 import os
 import sqlite3
 from datetime import datetime
+from urllib.parse import urljoin
 from OpenSSL import crypto
 import urllib3
 
@@ -41,13 +42,14 @@ def init_db():
 
     # v15 新增欄位：動態升級現有資料表，若無欄位則自動加上
     # 修正：每個 ALTER 各自獨立 try/except，避免某一欄「已存在」的例外
-    # 連帶擋住後面尚未新增的欄位 (例如舊 DB 已有前三欄，但還沒有 server_header)
+    # 連帶擋住後面尚未新增的欄位 (例如舊 DB 已有前幾欄，但還沒有新欄位)
     for col_sql in [
         "ALTER TABLE domain_audit ADD COLUMN security_headers TEXT DEFAULT '-'",
         "ALTER TABLE domain_audit ADD COLUMN tls_old TEXT DEFAULT '-'",
         "ALTER TABLE domain_audit ADD COLUMN can_be_embedded TEXT DEFAULT '-'",
         "ALTER TABLE domain_audit ADD COLUMN server_header TEXT DEFAULT '-'",
         "ALTER TABLE domain_audit ADD COLUMN scanned_url TEXT DEFAULT '-'",
+        "ALTER TABLE domain_audit ADD COLUMN redirect_url TEXT DEFAULT '-'",
     ]:
         try:
             c.execute(col_sql)
@@ -78,19 +80,19 @@ def save_domain_result(data):
     c = conn.cursor()
     try:
         # v15 更新：加入 security_headers, tls_old, can_be_embedded 與 server_header 寫入
-        # 新增：加入 scanned_url 寫入
+        # 新增：加入 scanned_url 與 redirect_url 寫入
         c.execute('''
             INSERT OR REPLACE INTO domain_audit (
                 domain, cdn_provider, cloud_hosting, multi_ip, cname, ips,
                 country, city, isp, tls_1_3, protocol, issuer, ssl_days,
-                global_ping, simple_ping, security_headers, tls_old, can_be_embedded, server_header, scanned_url
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                global_ping, simple_ping, security_headers, tls_old, can_be_embedded, server_header, scanned_url, redirect_url
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             data['Domain'], data['CDN Provider'], data['Cloud/Hosting'], data['Multi-IP'],
             data['CNAME'], data['IPs'], data['Country'], data['City'], data['ISP'],
             data['TLS 1.3'], data['Protocol'], data['Issuer'], str(data['SSL Days']),
             data['Global Ping'], data['Simple Ping'], data['Security Headers'], data['TLS 1.0/1.1'],
-            data['能否被嵌入'], data['Server Header'], data['URL']
+            data['能否被嵌入'], data['Server Header'], data['URL'], data['跳轉後路徑']
         ))
         conn.commit()
     except Exception as e: print(f"DB Error: {e}")
@@ -107,15 +109,19 @@ def get_all_domain_results():
             "city": "City", "isp": "ISP", "tls_1_3": "TLS 1.3", "protocol": "Protocol",
             "issuer": "Issuer", "ssl_days": "SSL Days", "global_ping": "Global Ping",
             "simple_ping": "Simple Ping", "security_headers": "Security Headers", "tls_old": "TLS 1.0/1.1",
-            "can_be_embedded": "能否被嵌入", "server_header": "Server Header", "scanned_url": "URL"
+            "can_be_embedded": "能否被嵌入", "server_header": "Server Header",
+            "scanned_url": "URL", "redirect_url": "跳轉後路徑"
         })
         if "updated_at" in df.columns: df = df.drop(columns=["updated_at"])
-        # 新增：把 URL 欄位排到 Domain 右邊
+        # 新增：把 URL、跳轉後路徑 依序排到 Domain 右邊
         cols = list(df.columns)
         if "URL" in cols and "Domain" in cols:
             cols.remove("URL")
             cols.insert(cols.index("Domain") + 1, "URL")
-            df = df[cols]
+        if "跳轉後路徑" in cols and "URL" in cols:
+            cols.remove("跳轉後路徑")
+            cols.insert(cols.index("URL") + 1, "跳轉後路徑")
+        df = df[cols]
         return df
     finally: conn.close()
 
@@ -174,12 +180,12 @@ def parse_input_raw(raw_text):
         if not token: continue
         clean = token.replace('https://', '').replace('http://', '')
         clean = clean.split('/')[0].split('?')[0].split(':')[0]
-        clean = re.sub(r'^[^a-zA-Z0-9\u4e00-\u9fa5\.]+|[^a-zA-Z0-9\u4e00-\u9fa5]+$', '', clean)
+        clean = re.sub(r'^[^a-zA-Z0-9一-龥\.]+|[^a-zA-Z0-9一-龥]+$', '', clean)
         if clean: final_items.append(clean)
     return final_items
 
 # 新增：解析輸入時，額外保留使用者輸入的「完整 URL」，供「Security Headers」、「Server Header」、
-# 「能否被嵌入」與「Simple Ping」判定使用
+# 「能否被嵌入」、「跳轉後路徑」與「Simple Ping」判定使用
 # (若使用者只輸入裸域名，則 full_url 會退回 https://domain，其餘欄位判定邏輯完全不受影響)
 def parse_input_with_url(raw_text):
     processed_text = re.sub(r'(\.[a-z]{2,5})(www\.|http)', r'\1\n\2', raw_text, flags=re.IGNORECASE)
@@ -192,7 +198,7 @@ def parse_input_with_url(raw_text):
         if not token: continue
         clean = token.replace('https://', '').replace('http://', '')
         clean = clean.split('/')[0].split('?')[0].split(':')[0]
-        clean = re.sub(r'^[^a-zA-Z0-9\u4e00-\u9fa5\.]+|[^a-zA-Z0-9\u4e00-\u9fa5]+$', '', clean)
+        clean = re.sub(r'^[^a-zA-Z0-9一-龥\.]+|[^a-zA-Z0-9一-龥]+$', '', clean)
         if not clean: continue
         if re.match(r'^https?://', token, flags=re.IGNORECASE):
             full_url = token
@@ -315,33 +321,67 @@ def run_simple_ping(url):
             return f"⚠️ {resp.status_code} (HTTP)"
         except: return "❌ Fail"
 
-# 更新：僅負責偵測 6 大 Security Headers 是否存在 (改用「域名內的完整 URL」檢測)
-def check_security_headers(url):
+# 新增：requests 只會跟隨 HTTP 3xx + Location 這種「協定層級」轉址，
+# 像 <meta http-equiv="refresh" content="0;URL=..."> 這種寫在網頁內容裡的「假轉址」，
+# 瀏覽器看得懂但 requests 不會自動跟，這裡手動解析、跟隨 (最多 5 層避免無窮迴圈)。
+# follow_meta_refresh=False 時完全不解析內容，只發一次請求，等同於原本的行為。
+def resolve_final_response(url, follow_meta_refresh=True, max_hops=5):
+    current_url = url
+    resp = None
+    for _ in range(max_hops):
+        try:
+            resp = requests.get(current_url, timeout=5, verify=False)
+        except requests.exceptions.ConnectionError:
+            # 現代瀏覽器遇到 http:// 連不上時會自動改用 https:// 重試一次，這裡比照辦理
+            if current_url.startswith('http://'):
+                current_url = current_url.replace('http://', 'https://', 1)
+                resp = requests.get(current_url, timeout=5, verify=False)
+            else:
+                raise
+        if not follow_meta_refresh:
+            break
+        # 真正的 meta refresh 標籤一定在 <head> 附近，只看前 4KB 避免掃到頁面內文裡剛好出現的文字
+        head_snippet = resp.text[:4096]
+        tag_match = re.search(r'http-equiv=["\']refresh["\'][^>]*content=["\']([^"\']*)["\']', head_snippet, re.IGNORECASE)
+        if not tag_match:
+            break
+        # 要求符合標準格式「數字;URL=網址」，不是隨便抓到 url= 字樣就信
+        url_match = re.search(r'^\s*\d+\s*;\s*url\s*=\s*(.+)', tag_match.group(1), re.IGNORECASE)
+        if not url_match:
+            break
+        next_url = urljoin(resp.url, url_match.group(1).strip().strip("'\""))
+        if next_url == current_url:
+            break
+        current_url = next_url
+    return resp
+
+# 更新：僅負責偵測 6 大 Security Headers 是否存在 (改用「域名內的完整 URL」檢測，並可選擇跟隨 meta refresh)
+def check_security_headers(url, follow_meta_refresh=True):
     headers_to_check = [
         'Strict-Transport-Security', 'Content-Security-Policy',
         'X-Frame-Options', 'X-Content-Type-Options',
         'Referrer-Policy', 'Permissions-Policy'
     ]
     try:
-        resp = requests.get(url, timeout=5, verify=False)
+        resp = resolve_final_response(url, follow_meta_refresh)
         found = [h for h in headers_to_check if h in resp.headers]
         return ", ".join(found) if found else "❌ 無"
     except:
         return "-"
 
 # 新增：獨立的 Server 標頭偵測 (只抓 Server 這個 header，不與 Security Header 合併匯出)
-def check_server_header(url):
+def check_server_header(url, follow_meta_refresh=True):
     try:
-        resp = requests.get(url, timeout=5, verify=False)
+        resp = resolve_final_response(url, follow_meta_refresh)
         server = resp.headers.get('Server', '')
         return server if server else "❌ 無"
     except:
         return "-"
 
 # 新增：能否被嵌入判定，改用「域名內的完整 URL」發送請求 (不再固定打網域根目錄 https://domain)
-def check_embeddable(url):
+def check_embeddable(url, follow_meta_refresh=True):
     try:
-        resp = requests.get(url, timeout=5, verify=False)
+        resp = resolve_final_response(url, follow_meta_refresh)
 
         # 利用 X-Frame-Options 與 Content-Security-Policy 判斷能否被嵌入
         x_frame = resp.headers.get('X-Frame-Options', '').upper()
@@ -359,6 +399,17 @@ def check_embeddable(url):
 
         # 依照要求：可以被嵌入顯示 ❗️，不能被嵌入顯示 ✅
         return "✅ 否" if is_blocked else "❗️ 是"
+    except:
+        return "-"
+
+# 新增：獨立記錄「跳轉後最終落點」。resolve_final_response 會依 follow_meta_refresh 決定
+# 是否連 meta refresh 也一併跟隨；只要最終網址跟輸入不同，就代表發生過轉址
+def check_redirect_path(url, follow_meta_refresh=True):
+    try:
+        resp = resolve_final_response(url, follow_meta_refresh)
+        if resp.url != url:
+            return resp.url
+        return "(無跳轉)"
     except:
         return "-"
 
@@ -393,7 +444,7 @@ def check_legacy_tls(domain):
 def process_domain_audit(args):
     index, domain, url, config = args
     result = {
-        "Domain": domain, "URL": url, "CDN Provider": "-", "Cloud/Hosting": "-", "Multi-IP": "-",
+        "Domain": domain, "URL": url, "跳轉後路徑": "-", "CDN Provider": "-", "Cloud/Hosting": "-", "Multi-IP": "-",
         "CNAME": "-", "IPs": "-", "Country": "-", "City": "-", "ISP": "-",
         "TLS 1.3": "-", "Protocol": "-", "Issuer": "-", "SSL Days": "-",
         "Global Ping": "-", "Simple Ping": "-",
@@ -477,14 +528,16 @@ def process_domain_audit(args):
             # v15 新增：檢測舊版 TLS
             result["TLS 1.0/1.1"] = check_legacy_tls(domain)
 
-        # v15 新增：檢測 Security Headers 與能否被嵌入 (兩者皆改用完整 URL 檢測)
+        # v15 新增：檢測 Security Headers 與能否被嵌入 (兩者皆改用完整 URL 檢測，並可依 config 跟隨 meta refresh)
+        # 新增：跳轉後路徑，一併記錄
         if config['security_header']:
-            result["Security Headers"] = check_security_headers(url)
-            result["能否被嵌入"] = check_embeddable(url)
+            result["Security Headers"] = check_security_headers(url, config['follow_meta_refresh'])
+            result["能否被嵌入"] = check_embeddable(url, config['follow_meta_refresh'])
+            result["跳轉後路徑"] = check_redirect_path(url, config['follow_meta_refresh'])
 
         # 新增：獨立的 Server 標頭偵測 (獨立於 Security Header 判定與匯出)
         if config['server_header']:
-            result["Server Header"] = check_server_header(url)
+            result["Server Header"] = check_server_header(url, config['follow_meta_refresh'])
 
         if config['global_ping']: result["Global Ping"] = run_globalping_api(domain)
         if config['simple_ping']: result["Simple Ping"] = run_simple_ping(url)
@@ -572,9 +625,14 @@ with tab1:
 
         # v15 更新：新增 Security Header 勾選
         check_ssl = st.checkbox("SSL & TLS 憑證", value=True, help="顯示憑證組織、過期日，並檢查 TLS 1.3 支援與舊版 TLS (1.0/1.1) 是否關閉")
-        check_security = st.checkbox("Security Header", value=True, help="檢測項目: Strict-Transport-Security, Content-Security-Policy, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy")
+        check_security = st.checkbox("Security Header", value=True, help="檢測項目: Strict-Transport-Security, Content-Security-Policy, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy；同時一併判定「能否被嵌入」與「跳轉後路徑」")
         # 新增：獨立的 Server 標頭偵測勾選 (放在 Security Header 底下)
         check_server = st.checkbox("Server 標頭偵測", value=True, help="獨立偵測並匯出 HTTP 回應中的 Server 標頭 (可看出伺服器軟體/版本，如 nginx, Apache, cloudflare 等)，不與 Security Header 合併匯出。")
+        # 新增：是否跟隨 meta refresh 這種網頁層級的假轉址
+        check_meta_refresh = st.checkbox(
+            "跟隨 Meta Refresh 轉址", value=True,
+            help='有些網站的轉址寫在網頁內容的 <meta http-equiv="refresh"> 標籤裡，是瀏覽器認得、但 requests 套件不會自動跟隨的「假轉址」。勾選後，Security Headers／Server Header／能否被嵌入／跳轉後路徑都會改用跟隨完之後的最終頁面判斷；沒勾則只看第一個回應。'
+        )
 
         st.subheader("2. 連線測試")
         check_simple_ping = st.checkbox("Simple Ping (本機)", value=True, help="從目前主機發送請求，適合內網或本機測試")
@@ -597,7 +655,7 @@ with tab1:
             "輸入域名 (會自動跳過已掃描項目)",
             height=150,
             placeholder="https://example.com/index.html\nwww.google.com",
-            help="若要精準判斷「Security Headers」、「Server 標頭」、「能否被嵌入」與「Simple Ping」，請輸入該域名內的完整 URL (含路徑)；若只輸入裸域名，則以該域名首頁判定。其餘檢測項目 (DNS/SSL 等) 一律以域名本身為準，不受路徑影響。"
+            help="若要精準判斷「Security Headers」、「Server 標頭」、「能否被嵌入」、「跳轉後路徑」與「Simple Ping」，請輸入該域名內的完整 URL (含路徑)；若只輸入裸域名，則以該域名首頁判定。其餘檢測項目 (DNS/SSL 等) 一律以域名本身為準，不受路徑影響。"
         )
         if st.button(" 開始掃描域名", type="primary"):
             parsed_pairs = parse_input_with_url(raw_input)
@@ -619,7 +677,8 @@ with tab1:
                 config = {
                     'dns': check_dns, 'geoip': check_geoip, 'ssl': check_ssl,
                     'global_ping': check_global_ping, 'simple_ping': check_simple_ping,
-                    'security_header': check_security, 'server_header': check_server
+                    'security_header': check_security, 'server_header': check_server,
+                    'follow_meta_refresh': check_meta_refresh
                 }
 
                 indexed_domains = list(enumerate(domain_list))
@@ -705,6 +764,8 @@ with tab3:
     * **新增惡意網站模擬**：新增獨立頁籤，整合外部 Clickjacking 測試工具，可直接在頁面內嵌入模擬畫面，用於示範/驗證目標網站是否容易遭受點擊劫持攻擊。
     * **修正 Simple Ping 路徑判斷**：Simple Ping 改用「域名內的完整 URL」檢測，不再固定打網域根目錄，避免輸入特定頁面路徑時仍顯示根目錄的連線結果。
     * **匯出報表新增 URL 欄位**：域名報告在 Domain 欄位右邊新增 URL 欄位，記錄該筆資料實際掃描的完整網址。
+    * **新增跳轉後路徑欄位**：所有請求預設就會自動跟隨轉址；這次新增獨立欄位記錄跟隨轉址後最終停留的網址，未發生轉址則顯示「(無跳轉)」。
+    * **新增「跟隨 Meta Refresh 轉址」勾選**：部分網站的轉址寫在網頁內容的 `<meta http-equiv="refresh">` 標籤裡，屬於瀏覽器認得、但一般 HTTP 請求不會自動跟隨的「假轉址」。勾選後 Security Headers／Server Header／能否被嵌入／跳轉後路徑都會改用跟隨完之後的最終頁面判斷。
 
     ---
 
